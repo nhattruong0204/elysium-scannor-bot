@@ -1,0 +1,7 @@
+[2026-11-01 08:00:00] #1 Alice Anders: New launch $NEST, CA 0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed docs https://docs.nest.example/start
+[2026-11-01 08:05:00] #2 ↩1 Bob: is $NEST legit? the nest looks empty (edited) (edited)
+[2026-11-01 08:10:00] #3 ↩1 Carol: same CA 0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed confirmed on https://elysium.kinetiq.xyz/address/x
+[2026-11-01 08:20:00] #4 Alice Anders: also watching $HYPE and 0x52908400098527886e0f7030069857d2e4169ee7, chart https://dexscreener.com/hyperevm/abc
+[2026-11-01 08:30:00] #5 Bob: gm, "quoted" text, commas, and
+    newlines
+[2026-11-01 08:50:00] #8 Carol: [photo]

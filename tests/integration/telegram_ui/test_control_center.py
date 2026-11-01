@@ -333,11 +333,7 @@ async def test_range_preset_confirmation_card(services: Services) -> None:
         "Stored messages in range: 0",
     ]
     done = await h.press(OWNER, "Continue")
-    assert (
-        "Export Raw Chat" in done.text
-        and "arrives in Phase 4" in done.text
-        and "Nothing was run" in done.text
-    )
+    assert "Export Raw Chat" in done.text and "Choose a format. No AI is used." in done.text
 
 
 @time_machine.travel(NOW, tick=False)
@@ -561,7 +557,7 @@ async def test_status_lists_and_cancels_running_job(services: Services) -> None:
     h = Harness(services)
     view = await h.open(OWNER, "/status")
     assert f"#{job.id} import since" in view.text
-    assert "schema 0002" in view.text and "Anthropic API not configured" in view.text
+    assert "schema 0003" in view.text and "Anthropic API not configured" in view.text
     view = await h.press(OWNER, f"Cancel #{job.id}")
     assert view.alerts == [f"Job #{job.id} cancelled."]
     async with services.sessions() as s:

@@ -232,3 +232,16 @@ These describe the behaviour actually shipped in #3, where it refines §§3–5:
 - **Danger zone:** "Deactivate group" needs the exact group title typed. "Delete all chat data" and purges ship with Phase 9. Switching the consent policy to `notice_only` needs an explicit confirmation that explains the Telegram-terms implication.
 - **Job cancel** marks the job `cancelled` and releases its lease. Job executors (Phase 4+) must check for cancellation between batches.
 - **Access:** admins can grant or remove analysts and viewers. Only owners can grant, change or remove admins. `ELYSIUM_ANALYST_CAN_EXPORT` (default false) controls export for analysts.
+
+### Phase 4 additions (scan, export, search)
+
+- **Scan** runs synchronously after the range is confirmed. It drains the chat's pending index, then shows:
+  - messages, service messages, active members, replies, threads and newly indexed rows;
+  - top senders (`Name (U3)`);
+  - contract strings with mention counts, first-message link and a checksum-mismatch flag;
+  - `$TICKER`s (counted over the newest 200k messages containing `$`), top domains and the coverage statement.
+
+  Follow-ups: AI Analysis of the range (mode picker; Phase 5 placeholder), Export this range, Source messages (paginated, 8 per page) and, when MTProto is enabled and the range has gaps, the backfill command to run on the server. Each scan updates `scan_checkpoints`, so **Since last scan** works per user.
+- **Export:** format (JSON / CSV / TXT / Markdown) → confirmation with row count, size estimate, coverage, toggles for pseudonymize / service / bot messages, and the user's hourly quota → background job with ≥ 3 s progress edits in the same message → document(s) in DM. Cancel it from Status. The format is documented in `docs/EXPORT_FORMAT.md`.
+- **Search** (Chat History → 🔎 Search messages) accepts words (AND), `"phrases"`, `$TICKER` (a single token, so `$NEST` ≠ `nest`) and full `0x…` addresses, which are matched exactly through `contract_mentions`. Results show 8 per page, with bold matches and 🔗 links.
+- **Scheduled collection:** changing the interval re-registers the timer immediately. A firing drains the chat's pending index under the `ingest` lease. If the lease is held, the firing is recorded as a `skipped` job. MTProto gap-fill stays CLI-only (`elysium-bot mtproto backfill`), because it needs an interactively logged-in session.

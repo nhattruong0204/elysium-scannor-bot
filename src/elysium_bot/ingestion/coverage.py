@@ -5,7 +5,6 @@ See HISTORY_INGESTION §6. The UI must never call partial history "complete".
 
 from __future__ import annotations
 
-import statistics
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
@@ -203,27 +202,53 @@ async def _observed_intervals(
     return _union(intervals)
 
 
+_GAPS_CTE = """
+    WITH d AS (
+        SELECT tg_message_id, sent_at,
+               tg_message_id - LAG(tg_message_id) OVER (ORDER BY tg_message_id) AS diff,
+               LAG(tg_message_id) OVER (ORDER BY tg_message_id) AS prev_id,
+               LAG(sent_at) OVER (ORDER BY tg_message_id) AS prev_sent
+        FROM messages
+        WHERE chat_id = :chat AND sent_at >= :start AND sent_at <= :end
+    )
+"""
+
+
 async def id_gaps(session: AsyncSession, chat_id: int, start: datetime, end: datetime) -> list[Gap]:
-    """Unaccounted message-id runs (supergroups: ids are per-chat and monotonic)."""
+    """Unaccounted message-id runs (supergroups: ids are per-chat and monotonic).
+
+    Runs entirely in SQL; only rows above the threshold are fetched, so memory stays flat for
+    windows with millions of messages.
+    """
+    params = {"chat": chat_id, "start": _bind(session, start), "end": _bind(session, end)}
+    n = (
+        await session.execute(
+            text(_GAPS_CTE + "SELECT count(*) FROM d WHERE diff IS NOT NULL"), params
+        )
+    ).scalar_one()
+    if not n:
+        return []
+    median = (
+        await session.execute(
+            text(
+                _GAPS_CTE
+                + "SELECT diff FROM d WHERE diff IS NOT NULL ORDER BY diff LIMIT 1 OFFSET :mid"
+            ),
+            {**params, "mid": int(n) // 2},
+        )
+    ).scalar_one()
+    threshold = max(MIN_ID_GAP, 3 * int(median))
     rows = (
         await session.execute(
             text(
-                """
-                SELECT tg_message_id, sent_at, prev_id, prev_sent FROM (
-                    SELECT tg_message_id, sent_at,
-                           LAG(tg_message_id) OVER (ORDER BY tg_message_id) AS prev_id,
-                           LAG(sent_at) OVER (ORDER BY tg_message_id) AS prev_sent
-                    FROM messages
-                    WHERE chat_id = :chat AND sent_at >= :start AND sent_at <= :end
-                ) t WHERE prev_id IS NOT NULL
-                """
-            ).bindparams(chat=chat_id, start=_bind(session, start), end=_bind(session, end))
+                _GAPS_CTE + "SELECT tg_message_id, sent_at, prev_id, prev_sent FROM d "
+                "WHERE diff > :threshold ORDER BY tg_message_id LIMIT 500"
+            ),
+            {**params, "threshold": threshold},
         )
     ).all()
-    diffs = [r.tg_message_id - r.prev_id for r in rows]
-    if not diffs:
+    if not rows:
         return []
-    threshold = max(MIN_ID_GAP, 3 * statistics.median(diffs))
     confirmed = list(
         (
             await session.execute(
@@ -237,9 +262,7 @@ async def id_gaps(session: AsyncSession, chat_id: int, start: datetime, end: dat
         ).all()
     )
     gaps = []
-    for r, d in zip(rows, diffs, strict=True):
-        if d <= threshold:
-            continue
+    for r in rows:
         lo, hi = r.prev_id + 1, r.tg_message_id - 1
         if any(a is not None and b is not None and a <= lo and hi <= b for a, b in confirmed):
             continue
@@ -250,7 +273,7 @@ async def id_gaps(session: AsyncSession, chat_id: int, start: datetime, end: dat
                 load_utc(r.sent_at),
                 lo,
                 hi,
-                f"possible gap (IDs {lo:,}–{hi:,} unaccounted for)",  # noqa: RUF001,
+                f"possible gap (IDs {lo:,}–{hi:,} unaccounted for)",  # noqa: RUF001
             )
         )
     return gaps

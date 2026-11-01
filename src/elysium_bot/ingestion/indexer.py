@@ -39,19 +39,15 @@ def _index_one(session: AsyncSession, msg: Message) -> None:
         )
 
 
-async def drain(sessions: async_sessionmaker[AsyncSession], limit: int = BATCH_SIZE) -> int:
-    """Index up to ``limit`` pending messages. Returns how many rows were processed."""
+async def drain(
+    sessions: async_sessionmaker[AsyncSession], limit: int = BATCH_SIZE, chat_id: int | None = None
+) -> int:
+    """Index up to ``limit`` pending messages (optionally of one chat). Returns rows processed."""
     async with sessions() as session:
-        pending = list(
-            (
-                await session.execute(
-                    select(Message)
-                    .where(Message.index_state == IndexState.PENDING)
-                    .order_by(Message.id)
-                    .limit(limit)
-                )
-            ).scalars()
-        )
+        stmt = select(Message).where(Message.index_state == IndexState.PENDING)
+        if chat_id is not None:
+            stmt = stmt.where(Message.chat_id == chat_id)
+        pending = list((await session.execute(stmt.order_by(Message.id).limit(limit))).scalars())
         if not pending:
             return 0
         ids = [m.id for m in pending]
@@ -71,8 +67,15 @@ async def drain(sessions: async_sessionmaker[AsyncSession], limit: int = BATCH_S
         return len(pending)
 
 
-async def drain_all(sessions: async_sessionmaker[AsyncSession]) -> int:
+async def drain_all(
+    sessions: async_sessionmaker[AsyncSession],
+    chat_id: int | None = None,
+    max_batches: int = 10_000,
+) -> int:
     total = 0
-    while processed := await drain(sessions):
+    for _ in range(max_batches):
+        processed = await drain(sessions, chat_id=chat_id)
+        if not processed:
+            break
         total += processed
     return total
