@@ -50,7 +50,8 @@ async def test_post_init_recovers_leases_beats_and_schedules_jobs(
         await _post_init(app)
 
     names = {call.kwargs["name"] for call in app.job_queue.run_repeating.call_args_list}
-    assert names == {"heartbeat", "lease_recovery"}
+    assert names == {"heartbeat", "lease_recovery", "indexer"}
+    app.job_queue.run_once.assert_not_called()  # first start: no downtime alert
     async with session_factory() as s:
         hb = await s.get(Heartbeat, "polling")
         assert hb is not None and hb.beat_at == T0 + timedelta(hours=1)
@@ -71,3 +72,29 @@ async def test_heartbeat_job_skips_when_updater_stopped(
     await _heartbeat_job(running)  # type: ignore[arg-type]
     async with session_factory() as s:
         assert await s.get(Heartbeat, "polling") is not None
+
+
+async def test_downtime_over_24h_records_gap_and_queues_owner_alert(
+    engine: AsyncEngine, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    from elysium_bot.db.enums import ChatStatus, CoverageKind
+    from elysium_bot.db.models import CoverageSegment
+    from elysium_bot.ops.health import POLLING, beat
+
+    async with session_factory() as s:
+        chat = await make_chat(s)
+        chat.status = ChatStatus.ACTIVE
+        await s.commit()
+    with time_machine.travel(T0, tick=False):
+        await beat(session_factory, POLLING)
+    services = _services(engine, session_factory)
+    app = _fake_app(services)
+    with time_machine.travel(T0 + timedelta(hours=30), tick=False):
+        await _post_init(app)
+
+    async with session_factory() as s:
+        gap = (await s.execute(select(CoverageSegment))).scalar_one()
+    assert gap.kind == CoverageKind.GAP_SUSPECTED
+    assert (gap.start_at, gap.end_at) == (T0, T0 + timedelta(hours=30))
+    app.job_queue.run_once.assert_called_once()
+    assert "offline for ~30 h" in app.job_queue.run_once.call_args.kwargs["data"]

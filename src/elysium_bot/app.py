@@ -8,14 +8,35 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from telegram import Update
-from telegram.ext import AIORateLimiter, Application, CommandHandler, ContextTypes, filters
+from telegram.ext import (
+    AIORateLimiter,
+    Application,
+    CallbackQueryHandler,
+    ChatMemberHandler,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 
 from elysium_bot.config import Settings
+from elysium_bot.db.models import Heartbeat
 from elysium_bot.db.session import create_engine, create_session_factory
+from elysium_bot.ingestion import coverage, indexer
+from elysium_bot.ingestion.bot_updates import on_chat_member, on_group_message, on_my_chat_member
 from elysium_bot.logging import get_logger
 from elysium_bot.ops.health import POLLING, beat
 from elysium_bot.scheduler.leases import JobService
+from elysium_bot.telegram_ui.group import (
+    CONSENT_PREFIX,
+    activate,
+    consent_callback,
+    consent_command,
+    deactivate,
+)
+from elysium_bot.telegram_ui.imports import on_document
 from elysium_bot.telegram_ui.start import start_command
+from elysium_bot.timeutil import utcnow
 
 log = get_logger(__name__)
 
@@ -30,6 +51,9 @@ ALLOWED_UPDATES = [
     Update.CALLBACK_QUERY,
 ]
 LEASE_RECOVERY_INTERVAL = timedelta(seconds=60)
+INDEXER_INTERVAL = timedelta(seconds=2)
+# Telegram keeps unfetched Bot API updates for at most 24 hours.
+UPDATE_RETENTION = timedelta(hours=24)
 
 
 class ConfigurationError(RuntimeError):
@@ -65,7 +89,23 @@ def build_application(services: Services) -> App:
     )
     app.bot_data["services"] = services
     app.bot_data["settings"] = services.settings
+    # Group -1 runs first for every update: persist before any command handling.
+    app.add_handler(
+        MessageHandler(
+            filters.ChatType.GROUPS
+            & (filters.UpdateType.MESSAGE | filters.UpdateType.EDITED_MESSAGE),
+            on_group_message,
+        ),
+        group=-1,
+    )
     app.add_handler(CommandHandler("start", start_command, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("activate", activate, filters=filters.ChatType.GROUPS))
+    app.add_handler(CommandHandler("deactivate", deactivate, filters=filters.ChatType.GROUPS))
+    app.add_handler(CommandHandler("consent", consent_command, filters=filters.ChatType.GROUPS))
+    app.add_handler(CallbackQueryHandler(consent_callback, pattern=f"^{CONSENT_PREFIX}"))
+    app.add_handler(ChatMemberHandler(on_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
+    app.add_handler(ChatMemberHandler(on_chat_member, ChatMemberHandler.CHAT_MEMBER))
+    app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.Document.ALL, on_document))
     return app
 
 
@@ -79,6 +119,7 @@ async def _post_init(app: App) -> None:
     recovered = await services.jobs.recover_expired()
     if recovered:
         log.warning("startup.recovered_jobs", count=len(recovered))
+    gap_alert = await _detect_downtime(services)
     await beat(services.sessions, POLLING, {"phase": "startup"})
 
     job_queue = app.job_queue
@@ -89,6 +130,11 @@ async def _post_init(app: App) -> None:
         interval=services.settings.heartbeat_interval_s,
         first=services.settings.heartbeat_interval_s,
         name="heartbeat",
+    )
+    if gap_alert:
+        job_queue.run_once(_notify_owners_job, when=0, data=gap_alert, name="downtime_alert")
+    job_queue.run_repeating(
+        _index_job, interval=INDEXER_INTERVAL, first=INDEXER_INTERVAL, name="indexer"
     )
     job_queue.run_repeating(
         _lease_recovery_job,
@@ -112,6 +158,42 @@ async def _heartbeat_job(context: ContextTypes.DEFAULT_TYPE) -> None:
         log.warning("heartbeat.skipped", reason="updater_not_running")
         return
     await beat(_services(app).sessions, POLLING, {"updater_running": True})
+
+
+async def _detect_downtime(services: Services) -> str | None:
+    """Record a suspected gap per active chat if the bot was down > 24 h (updates were lost)."""
+    async with services.sessions() as session:
+        previous = await session.get(Heartbeat, POLLING)
+        now = utcnow()
+        chats = await coverage.detect_downtime_gaps(
+            session, previous.beat_at if previous else None, now, UPDATE_RETENTION
+        )
+        await session.commit()
+    if not chats or previous is None:
+        return None
+    hours = int((now - previous.beat_at).total_seconds() // 3600)
+    names = ", ".join(c.title or str(c.tg_chat_id) for c in chats)
+    log.warning("startup.downtime_gap", hours=hours, chats=len(chats))
+    return (
+        f"⚠️ The bot was offline for ~{hours} h. Telegram keeps updates for 24 h at most, "
+        f"so messages in that window may be missing for: {names}.\n"
+        "Fix: import a Telegram Desktop export covering the gap "
+        "(or run MTProto backfill if enabled)."
+    )
+
+
+async def _notify_owners_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    text = str(context.job.data) if context.job else ""
+    services = _services(context.application)
+    for owner in services.settings.owner_user_ids:
+        try:
+            await context.bot.send_message(owner, text)
+        except Exception:
+            log.warning("alert.delivery_failed", owner=owner)
+
+
+async def _index_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    await indexer.drain(_services(context.application).sessions)
 
 
 async def _lease_recovery_job(context: ContextTypes.DEFAULT_TYPE) -> None:
