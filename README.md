@@ -8,7 +8,7 @@ This project is a research tool. It does not trade, and nothing it produces is f
 - Roadmap & phases: [`docs/IMPLEMENTATION_ROADMAP.md`](docs/IMPLEMENTATION_ROADMAP.md), tracker issue #10
 - Rules for coding agents: [`AGENTS.md`](AGENTS.md)
 
-> **Status:** Phase 2 (collection & history import). The bot archives every message from activated groups, imports Telegram Desktop history exports, tracks coverage and gaps, and records per-member AI consent. The DM control center arrives in Phase 3.
+> **Status:** Phase 3 (control center). In addition to collection, history import and coverage tracking (Phase 2), owners and authorized users get a button-driven control center in DM (`/menu`): status, chat history and coverage, settings, access management, schedules and a time-range picker. Scan/export (Phase 4) and AI analysis (Phase 5) plug into it next.
 
 ## Quickstart — local development
 
@@ -59,6 +59,10 @@ The entrypoint applies migrations (serialized with `flock`) before starting. Dat
 5. Check completeness: `elysium-bot coverage --chat -100… [--from 2026-10-01 --to 2026-11-01]`.
 
 `/deactivate` (owner) stops collection and keeps the data.
+
+### Control center (DM)
+
+Send `/menu` to the bot in a private chat (or tap **Open control center** after `/menu` in the group). The control center shows only real numbers from the database. Buttons depend on your role: **owner** (from `ELYSIUM_OWNER_USER_IDS`), **admin**, **analyst** or **viewer**. Owners and admins grant roles under *Settings → Manage access*, by forwarding a message from the person or sending their numeric ID. Shortcuts: `/scan`, `/export`, `/analyze`, `/projects`, `/ask`, `/history`, `/schedule`, `/settings`, `/status`, `/help`.
 
 ### Optional: MTProto backfill (off by default)
 

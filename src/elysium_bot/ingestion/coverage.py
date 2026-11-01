@@ -246,8 +246,8 @@ async def id_gaps(session: AsyncSession, chat_id: int, start: datetime, end: dat
         gaps.append(
             Gap(
                 "id_gap",
-                _load(r.prev_sent),
-                _load(r.sent_at),
+                load_utc(r.prev_sent),
+                load_utc(r.sent_at),
                 lo,
                 hi,
                 f"possible gap (IDs {lo:,}–{hi:,} unaccounted for)",  # noqa: RUF001,
@@ -263,7 +263,8 @@ def _bind(session: AsyncSession, dt: datetime) -> object:
     return dt
 
 
-def _load(value: object) -> datetime | None:
+def load_utc(value: object) -> datetime | None:
+    """Normalize a DB/raw-SQL datetime (naive UTC on SQLite) to aware UTC."""
     if value is None:
         return None
     dt = value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
@@ -287,7 +288,7 @@ async def statement(
             )
         )
     ).one()
-    first_at, last_at = _load(earliest), _load(latest)
+    first_at, last_at = load_utc(earliest), load_utc(latest)
     start = window_start or first_at
     end = window_end or (now if last_at else None)
 

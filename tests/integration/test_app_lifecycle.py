@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import time_machine
 from sqlalchemy import select
@@ -29,6 +29,7 @@ def _fake_app(services: Services, updater_running: bool = True) -> Any:
         bot_data={"services": services, "settings": services.settings},
         job_queue=MagicMock(),
         updater=SimpleNamespace(running=updater_running),
+        bot=SimpleNamespace(set_my_commands=AsyncMock(), set_chat_menu_button=AsyncMock()),
     )
 
 
@@ -50,7 +51,12 @@ async def test_post_init_recovers_leases_beats_and_schedules_jobs(
         await _post_init(app)
 
     names = {call.kwargs["name"] for call in app.job_queue.run_repeating.call_args_list}
-    assert names == {"heartbeat", "lease_recovery", "indexer"}
+    assert names == {"heartbeat", "lease_recovery", "indexer", "flow_sweep"}
+    scopes = [type(c.kwargs["scope"]).__name__ for c in app.bot.set_my_commands.call_args_list]
+    assert scopes == ["BotCommandScopeAllPrivateChats", "BotCommandScopeAllGroupChats"]
+    private = [c.command for c in app.bot.set_my_commands.call_args_list[0].args[0]]
+    assert private[:3] == ["menu", "scan", "export"]
+    app.bot.set_chat_menu_button.assert_awaited_once()
     app.job_queue.run_once.assert_not_called()  # first start: no downtime alert
     async with session_factory() as s:
         hb = await s.get(Heartbeat, "polling")

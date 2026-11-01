@@ -55,6 +55,10 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "ASYNC"]
 
 [tool.ruff.lint.per-file-ignores]
 "src/elysium_bot/migrations/versions/*.py" = ["E501"]
+# UI copy uses typographic glyphs (‹ › – ℹ ➕) on purpose; screens.py keeps user-facing strings unwrapped.
+"src/elysium_bot/telegram_ui/*.py" = ["RUF001"]
+"src/elysium_bot/telegram_ui/screens.py" = ["RUF001", "E501"]
+"tests/**/*.py" = ["RUF001"]
 
 [tool.mypy]
 python_version = "3.12"
