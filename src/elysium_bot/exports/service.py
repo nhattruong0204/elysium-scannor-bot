@@ -110,16 +110,22 @@ def _filters(scope: ChatScope, req: ExportRequest) -> list[Any]:
     if not req.include_bots:
         clauses.append(
             Message.sender_user_id.is_(None)
-            | Message.sender_user_id.not_in(select(TelegramUser.id).where(TelegramUser.is_bot.is_(True)))
+            | Message.sender_user_id.not_in(
+                select(TelegramUser.id).where(TelegramUser.is_bot.is_(True))
+            )
         )
     return clauses
 
 
 async def count_rows(session: AsyncSession, scope: ChatScope, req: ExportRequest) -> int:
-    return int((await session.execute(select(func.count()).where(*_filters(scope, req)))).scalar_one())
+    return int(
+        (await session.execute(select(func.count()).where(*_filters(scope, req)))).scalar_one()
+    )
 
 
-async def recent_exports(session: AsyncSession, scope: ChatScope, within: timedelta = timedelta(hours=1)) -> int:
+async def recent_exports(
+    session: AsyncSession, scope: ChatScope, within: timedelta = timedelta(hours=1)
+) -> int:
     since = utcnow() - within
     return int(
         (
@@ -142,7 +148,11 @@ async def iter_rows(
         stmt = (
             select(Message, TelegramUser, ChatMember)
             .outerjoin(TelegramUser, TelegramUser.id == Message.sender_user_id)
-            .outerjoin(ChatMember, (ChatMember.user_id == Message.sender_user_id) & (ChatMember.chat_id == scope.chat_id))
+            .outerjoin(
+                ChatMember,
+                (ChatMember.user_id == Message.sender_user_id)
+                & (ChatMember.chat_id == scope.chat_id),
+            )
             .where(*_filters(scope, req))
             .order_by(Message.sent_at, Message.id)
             .limit(BATCH)
@@ -154,34 +164,68 @@ async def iter_rows(
             return
         ids = [m.id for m, _, _ in batch]
         links: dict[int, list[str]] = defaultdict(list)
-        for mid, url in (await session.execute(
-            select(MessageLink.message_id, MessageLink.url).where(MessageLink.message_id.in_(ids)).order_by(MessageLink.position)
-        )).all():
+        for mid, url in (
+            await session.execute(
+                select(MessageLink.message_id, MessageLink.url)
+                .where(MessageLink.message_id.in_(ids))
+                .order_by(MessageLink.position)
+            )
+        ).all():
             links[mid].append(url)
         contracts: dict[int, list[dict[str, str]]] = defaultdict(list)
-        for mid, raw, fmt, state in (await session.execute(
-            select(ContractMention.message_id, ContractMention.raw, ContractMention.format, ContractMention.checksum_state)
-            .where(ContractMention.message_id.in_(ids)).order_by(ContractMention.position)
-        )).all():
-            contracts[mid].append({"value": raw, "format": fmt.value, "checksum_state": state.value})
+        for mid, raw, fmt, state in (
+            await session.execute(
+                select(
+                    ContractMention.message_id,
+                    ContractMention.raw,
+                    ContractMention.format,
+                    ContractMention.checksum_state,
+                )
+                .where(ContractMention.message_id.in_(ids))
+                .order_by(ContractMention.position)
+            )
+        ).all():
+            contracts[mid].append(
+                {"value": raw, "format": fmt.value, "checksum_state": state.value}
+            )
         sources: dict[int, list[str]] = defaultdict(list)
-        for mid, src in (await session.execute(
-            select(MessageSource.message_id, MessageSource.source).where(MessageSource.message_id.in_(ids))
-        )).all():
+        for mid, src in (
+            await session.execute(
+                select(MessageSource.message_id, MessageSource.source).where(
+                    MessageSource.message_id.in_(ids)
+                )
+            )
+        ).all():
             sources[mid].append(src.value)
-        versions = dict((await session.execute(
-            select(MessageVersion.message_id, func.count()).where(MessageVersion.message_id.in_(ids)).group_by(MessageVersion.message_id)
-        )).all())
+        versions = dict(
+            (
+                await session.execute(
+                    select(MessageVersion.message_id, func.count())
+                    .where(MessageVersion.message_id.in_(ids))
+                    .group_by(MessageVersion.message_id)
+                )
+            ).all()
+        )
         for msg, user, member in batch:
-            yield _row(msg, user, member, chat, tz, req.pseudonymize, links, contracts, sources, versions)
+            yield _row(
+                msg, user, member, chat, tz, req.pseudonymize, links, contracts, sources, versions
+            )
         last = batch[-1][0]
         cursor = (last.sent_at, last.id)
+        session.expunge_all()  # keep the identity map from growing across batches
 
 
 def _row(
-    msg: Message, user: TelegramUser | None, member: ChatMember | None, chat: TelegramChat, tz: str,
-    pseudonymize: bool, links: dict[int, list[str]], contracts: dict[int, list[dict[str, str]]],
-    sources: dict[int, list[str]], versions: dict[int, int],
+    msg: Message,
+    user: TelegramUser | None,
+    member: ChatMember | None,
+    chat: TelegramChat,
+    tz: str,
+    pseudonymize: bool,
+    links: dict[int, list[str]],
+    contracts: dict[int, list[dict[str, str]]],
+    sources: dict[int, list[str]],
+    versions: dict[int, int],
 ) -> dict[str, Any]:
     if pseudonymize:
         label = member.pseudonym if member else ("channel" if msg.sender_chat_tg_id else "unknown")
@@ -197,7 +241,12 @@ def _row(
     return {
         "chat_id": chat.tg_chat_id,
         "tg_message_id": msg.tg_message_id,
-        "message_link": message_url(chat.tg_chat_id, msg.tg_message_id, username=chat.username, thread_id=msg.message_thread_id),
+        "message_link": message_url(
+            chat.tg_chat_id,
+            msg.tg_message_id,
+            username=chat.username,
+            thread_id=msg.message_thread_id,
+        ),
         "sent_at_utc": msg.sent_at.isoformat(),
         "sent_at_local": format_local(msg.sent_at, tz, "%Y-%m-%d %H:%M:%S"),
         "sender_id": sender_id,
@@ -272,7 +321,10 @@ def _finalize(paths: list[Path], stem: str) -> list[Path]:
         if target.stat().st_size > ZIP_THRESHOLD_BYTES:
             zipped = target.with_name(target.name + ".zip")
             fd = os.open(zipped, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            with os.fdopen(fd, "wb") as raw, zipfile.ZipFile(raw, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+            with (
+                os.fdopen(fd, "wb") as raw,
+                zipfile.ZipFile(raw, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf,
+            ):
                 zf.write(target, arcname=target.name)
             target.unlink()
             target = zipped
@@ -305,8 +357,14 @@ async def export_chat(
     job = None
     if jobs is not None:
         job = await jobs.acquire_lease(
-            scope.chat_id, JobFamily.EXPORT, JobKind.EXPORT,
-            params={"fmt": req.fmt, "start": req.window.start.isoformat(), "end": req.window.end.isoformat()},
+            scope.chat_id,
+            JobFamily.EXPORT,
+            JobKind.EXPORT,
+            params={
+                "fmt": req.fmt,
+                "start": req.window.start.isoformat(),
+                "end": req.window.end.isoformat(),
+            },
             requested_by=scope.actor_tg_user_id,
         )
         if job is None:
@@ -316,16 +374,27 @@ async def export_chat(
         "generated_at_utc": utcnow().isoformat(),
         "chat_title": chat.title,
         "chat_id": chat.tg_chat_id,
-        "window_local": f"{format_local(req.window.start, tz)} → {format_local(req.window.end, tz)} ({tz})",
+        "window_local": (
+            f"{format_local(req.window.start, tz)} → {format_local(req.window.end, tz)} ({tz})"
+        ),
         "window_utc": f"{req.window.start.isoformat()} → {req.window.end.isoformat()}",
         "rows_expected": total,
-        "filters": {"pseudonymized": req.pseudonymize, "service_messages": req.include_service, "bot_messages": req.include_bots},
+        "filters": {
+            "pseudonymized": req.pseudonymize,
+            "service_messages": req.include_service,
+            "bot_messages": req.include_bots,
+        },
         "coverage": cov.human_text,
         "coverage_complete": cov.complete_for_window,
-        "note": f"Contains private group data, handle accordingly. No AI was used. {CONTRACT_NOTE}.",
+        "note": (
+            f"Contains private group data, handle accordingly. No AI was used. {CONTRACT_NOTE}."
+        ),
         "app_version": __version__,
     }
-    stem = f"elysium_export_{chat.tg_chat_id}_{req.window.start:%Y%m%d%H%M}_{req.window.end:%Y%m%d%H%M}_{utcnow():%H%M%S%f}"
+    stem = (
+        f"elysium_export_{chat.tg_chat_id}_{req.window.start:%Y%m%d%H%M}"
+        f"_{req.window.end:%Y%m%d%H%M}_{utcnow():%H%M%S%f}"
+    )
     parts = _PartWriter(tmp_dir(data_dir), stem, req.fmt, meta)
     written = 0
     try:
@@ -344,8 +413,14 @@ async def export_chat(
         async with sessions() as session:
             await AuditLogRepository(session, scope).record(
                 AuditAction.EXPORT,
-                {"fmt": req.fmt, "rows": written, "start": req.window.start.isoformat(),
-                 "end": req.window.end.isoformat(), "pseudonymized": req.pseudonymize, "parts": len(files)},
+                {
+                    "fmt": req.fmt,
+                    "rows": written,
+                    "start": req.window.start.isoformat(),
+                    "end": req.window.end.isoformat(),
+                    "pseudonymized": req.pseudonymize,
+                    "parts": len(files),
+                },
             )
             await session.commit()
     except BaseException as exc:
@@ -357,9 +432,13 @@ async def export_chat(
         raise
     if jobs is not None and job is not None:
         await jobs.complete(job.id, {"rows": written, "parts": len(files)})
-    return ExportResult(files, written, parts.total_bytes, cov.human_text, job.id if job else None, len(files), meta)
+    return ExportResult(
+        files, written, parts.total_bytes, cov.human_text, job.id if job else None, len(files), meta
+    )
 
 
 async def _cancelled(session: AsyncSession, job_id: int) -> bool:
-    status = (await session.execute(select(Job.status).where(Job.id == job_id))).scalar_one_or_none()
+    status = (
+        await session.execute(select(Job.status).where(Job.id == job_id))
+    ).scalar_one_or_none()
     return status == JobStatus.CANCELLED

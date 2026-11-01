@@ -51,7 +51,9 @@ class JsonWriter(_Base):
     extension = "json"
 
     def begin(self, meta: dict[str, Any]) -> None:
-        self.fh.write('{"meta": ' + json.dumps(meta, ensure_ascii=False, default=str) + ', "messages": [\n')
+        self.fh.write(
+            '{"meta": ' + json.dumps(meta, ensure_ascii=False, default=str) + ', "messages": [\n'
+        )
 
     def row(self, row: dict[str, Any]) -> None:
         if self.count:
@@ -60,7 +62,9 @@ class JsonWriter(_Base):
         self.count += 1
 
     def end(self, summary: dict[str, Any]) -> None:
-        self.fh.write('\n], "summary": ' + json.dumps(summary, ensure_ascii=False, default=str) + "}\n")
+        self.fh.write(
+            '\n], "summary": ' + json.dumps(summary, ensure_ascii=False, default=str) + "}\n"
+        )
 
 
 class CsvWriter(_Base):
@@ -71,14 +75,20 @@ class CsvWriter(_Base):
     def begin(self, meta: dict[str, Any]) -> None:
         self.fh.write("﻿")
         for key, value in meta.items():
-            flat = json.dumps(value, ensure_ascii=False, default=str) if isinstance(value, dict | list) else value
+            flat = (
+                json.dumps(value, ensure_ascii=False, default=str)
+                if isinstance(value, dict | list)
+                else value
+            )
             self.fh.write(f"# {key}: {str(flat).replace(chr(10), ' ')}\n")
         self.writer = csv.DictWriter(self.fh, fieldnames=FIELDS, lineterminator="\r\n")
         self.writer.writeheader()
 
     def row(self, row: dict[str, Any]) -> None:
         flat = {
-            k: json.dumps(v, ensure_ascii=False) if isinstance(v, list | dict) else ("" if v is None else v)
+            k: json.dumps(v, ensure_ascii=False)
+            if isinstance(v, list | dict)
+            else ("" if v is None else v)
             for k, v in row.items()
         }
         self.writer.writerow(flat)
@@ -107,7 +117,9 @@ class TxtWriter(_Base):
         if row.get("is_service"):
             body = f"[service] {body}".strip()
         body = body.replace("\n", "\n    ")  # continuation lines are indented
-        self.fh.write(f"[{row['sent_at_local']}] #{row['tg_message_id']}{reply} {_who(row)}: {body}{edited}\n")
+        self.fh.write(
+            f"[{row['sent_at_local']}] #{row['tg_message_id']}{reply} {_who(row)}: {body}{edited}\n"
+        )
         self.count += 1
 
     def end(self, summary: dict[str, Any]) -> None:
@@ -134,10 +146,13 @@ class MarkdownWriter(_Base):
             self.fh.write(f"\n## {day}\n\n")
             self.day = day
         reply = f" ↩ [{row['reply_to_tg_message_id']}]" if row.get("reply_to_tg_message_id") else ""
-        body = _md_escape(row.get("text") or (f"[{row['media_type']}]" if row.get("media_type") else ""))
+        body = _md_escape(
+            row.get("text") or (f"[{row['media_type']}]" if row.get("media_type") else "")
+        )
         body = body.replace("\n", "  \n  ")  # hard line breaks inside the list item
         link = f"[#{row['tg_message_id']}]({row['message_link']})"
-        self.fh.write(f"- **{str(row['sent_at_local'])[11:16]}** {link} **{_md_escape(_who(row))}**{reply}: {body}\n")
+        when = str(row["sent_at_local"])[11:16]
+        self.fh.write(f"- **{when}** {link} **{_md_escape(_who(row))}**{reply}: {body}\n")
         self.count += 1
 
     def end(self, summary: dict[str, Any]) -> None:
