@@ -59,6 +59,7 @@ class Settings(BaseSettings):
     # --- Data lifecycle / exports (used from Phase 4 / 9) -------------------------------------
     retention_days: int | None = None
     export_max_per_hour: int = 5
+    analyst_can_export: bool = False
 
     # --- MTProto backfill (optional, used from Phase 2c) --------------------------------------
     mtproto_enabled: bool = False
