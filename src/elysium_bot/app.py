@@ -7,7 +7,14 @@ from datetime import timedelta
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
-from telegram import Update
+from telegram import (
+    BotCommand,
+    BotCommandScopeAllGroupChats,
+    BotCommandScopeAllPrivateChats,
+    MenuButtonCommands,
+    Update,
+)
+from telegram.error import TelegramError
 from telegram.ext import (
     AIORateLimiter,
     Application,
@@ -27,6 +34,7 @@ from elysium_bot.ingestion.bot_updates import on_chat_member, on_group_message, 
 from elysium_bot.logging import get_logger
 from elysium_bot.ops.health import POLLING, beat
 from elysium_bot.scheduler.leases import JobService
+from elysium_bot.telegram_ui.flows import FlowStore
 from elysium_bot.telegram_ui.group import (
     CONSENT_PREFIX,
     activate,
@@ -35,7 +43,13 @@ from elysium_bot.telegram_ui.group import (
     deactivate,
 )
 from elysium_bot.telegram_ui.imports import on_document
-from elysium_bot.telegram_ui.start import start_command
+from elysium_bot.telegram_ui.screens import (
+    COMMAND_SCREENS,
+    group_menu,
+    on_private_input,
+    open_control_center,
+    router,
+)
 from elysium_bot.timeutil import utcnow
 
 log = get_logger(__name__)
@@ -52,6 +66,26 @@ ALLOWED_UPDATES = [
 ]
 LEASE_RECOVERY_INTERVAL = timedelta(seconds=60)
 INDEXER_INTERVAL = timedelta(seconds=2)
+FLOW_SWEEP_INTERVAL = timedelta(hours=1)
+PRIVATE_COMMANDS = [
+    ("menu", "Open the control center"),
+    ("scan", "Scan messages"),
+    ("export", "Export raw chat"),
+    ("analyze", "AI analysis"),
+    ("projects", "Research projects"),
+    ("ask", "Ask research AI"),
+    ("history", "Chat history & coverage"),
+    ("schedule", "Scheduled scans"),
+    ("settings", "Settings"),
+    ("status", "Status"),
+    ("help", "Help"),
+]
+GROUP_COMMANDS = [
+    ("menu", "Open the control center (in DM)"),
+    ("activate", "Owner: start collecting this group"),
+    ("consent", "Choose whether your messages may be used for AI analysis"),
+    ("help", "What this bot does"),
+]
 # Telegram keeps unfetched Bot API updates for at most 24 hours.
 UPDATE_RETENTION = timedelta(hours=24)
 
@@ -98,14 +132,24 @@ def build_application(services: Services) -> App:
         ),
         group=-1,
     )
-    app.add_handler(CommandHandler("start", start_command, filters=filters.ChatType.PRIVATE))
+    app.add_handler(
+        CommandHandler(list(COMMAND_SCREENS), open_control_center, filters=filters.ChatType.PRIVATE)
+    )
+    app.add_handler(CommandHandler("menu", group_menu, filters=filters.ChatType.GROUPS))
     app.add_handler(CommandHandler("activate", activate, filters=filters.ChatType.GROUPS))
     app.add_handler(CommandHandler("deactivate", deactivate, filters=filters.ChatType.GROUPS))
     app.add_handler(CommandHandler("consent", consent_command, filters=filters.ChatType.GROUPS))
     app.add_handler(CallbackQueryHandler(consent_callback, pattern=f"^{CONSENT_PREFIX}"))
+    app.add_handler(CallbackQueryHandler(router.dispatch, pattern=r"^v1:"))
     app.add_handler(ChatMemberHandler(on_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
     app.add_handler(ChatMemberHandler(on_chat_member, ChatMemberHandler.CHAT_MEMBER))
     app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.Document.ALL, on_document))
+    app.add_handler(
+        MessageHandler(
+            filters.ChatType.PRIVATE & ((filters.TEXT & ~filters.COMMAND) | filters.FORWARDED),
+            on_private_input,
+        )
+    )
     return app
 
 
@@ -133,6 +177,10 @@ async def _post_init(app: App) -> None:
     )
     if gap_alert:
         job_queue.run_once(_notify_owners_job, when=0, data=gap_alert, name="downtime_alert")
+    job_queue.run_repeating(
+        _flow_sweep_job, interval=FLOW_SWEEP_INTERVAL, first=FLOW_SWEEP_INTERVAL, name="flow_sweep"
+    )
+    await _register_commands(app)
     job_queue.run_repeating(
         _index_job, interval=INDEXER_INTERVAL, first=INDEXER_INTERVAL, name="indexer"
     )
@@ -190,6 +238,24 @@ async def _notify_owners_job(context: ContextTypes.DEFAULT_TYPE) -> None:
             await context.bot.send_message(owner, text)
         except Exception:
             log.warning("alert.delivery_failed", owner=owner)
+
+
+async def _register_commands(app: App) -> None:
+    """Persistent command menus (TELEGRAM_UX §4). Failures are logged, never fatal."""
+    try:
+        await app.bot.set_my_commands(
+            [BotCommand(c, d) for c, d in PRIVATE_COMMANDS], scope=BotCommandScopeAllPrivateChats()
+        )
+        await app.bot.set_my_commands(
+            [BotCommand(c, d) for c, d in GROUP_COMMANDS], scope=BotCommandScopeAllGroupChats()
+        )
+        await app.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+    except TelegramError:
+        log.warning("startup.commands_not_set")
+
+
+async def _flow_sweep_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    await FlowStore(_services(context.application).sessions).sweep()
 
 
 async def _index_job(context: ContextTypes.DEFAULT_TYPE) -> None:
