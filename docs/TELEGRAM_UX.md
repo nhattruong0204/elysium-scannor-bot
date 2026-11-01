@@ -218,3 +218,17 @@ Follow-ups keep the last 3 Q/A turns as context (stored in `ui_flows`). Each ans
 - RangePicker presets produce correct UTC bounds across the `Asia/Ho_Chi_Minh` midnight boundary; month navigation handles Dec→Jan.
 - `split_html` never produces invalid HTML (parse each chunk with `html.parser`).
 - Snapshot tests for main menu, estimate card, and report card rendering, using fixed DB fixtures.
+
+## 9. Implementation notes (Phase 3, 2026-11-01)
+
+These describe the behaviour actually shipped in #3, where it refines §§3–5:
+
+- **Callback ops:** `menu`, `nav:<screen>`, `chat:<id>`, `rng:<action>`, `set:<action>`, `acc:<action>`, `sch:<action>`, `job:<id>`, `imp:<run id>`, `pg:<n>`, `cfm:<yes|no|typed>`, `noop`. Each route declares its `Permission`. The router re-resolves the role from the DB on every press. A crafted callback for a forbidden op returns to the main menu with "Your role doesn't allow this."
+- **One flow per open control-center message** (`ui_flows.flow = "cc"`). Typed replies (custom range, timezone, user to grant, typed-title confirmation) go to the user's most recent flow with `state.pending`. The bot asks in the existing message, without ForceReply markup, and edits that same message with the result. Validation errors are also sent as a short reply.
+- **Main menu:** buttons are filtered by role (a viewer sees Projects, History, Status, Help). The "Projects tracked" line appears from Phase 6. The AI line reads "not configured" or "key configured · analysis arrives in Phase 5". A Help row is always present. The group selector row shows only when the user can access more than one group.
+- **Range picker:** presets, "Entire stored history" (labelled *stored*, with the coverage caveat), a calendar (Monday-first; days without stored messages are prefixed `·`; month navigation crosses years), an hour grid of 6×4, minutes `:00/:15/:30/:45`, then *End = now* or a picked end, and typed ranges (`2026-11-01 10:00 → 2026-11-01 14:00`, `today`, `yesterday`, `last 3h`, a single date). "Since last scan" shows an explanatory alert until Phase 4 creates `scan_checkpoints`.
+- **Placeholders:** Scan and Export (Phase 4), the AI modes (Summary and Early Plays in Phase 5; Deep / What's Changed / Ask in Phase 8) and Research Projects (Phase 6) end at honest "arrives in Phase N. Nothing was run." cards that show the confirmed window.
+- **Deep link:** group `/menu` → `t.me/<bot>?start=cc_<internal chat id>`. The id isn't secret, and access is still checked against the user's role.
+- **Danger zone:** "Deactivate group" needs the exact group title typed. "Delete all chat data" and purges ship with Phase 9. Switching the consent policy to `notice_only` needs an explicit confirmation that explains the Telegram-terms implication.
+- **Job cancel** marks the job `cancelled` and releases its lease. Job executors (Phase 4+) must check for cancellation between batches.
+- **Access:** admins can grant or remove analysts and viewers. Only owners can grant, change or remove admins. `ELYSIUM_ANALYST_CAN_EXPORT` (default false) controls export for analysts.

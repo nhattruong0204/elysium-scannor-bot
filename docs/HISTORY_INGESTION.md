@@ -188,7 +188,7 @@ After a large import, a `digest_build` job (Phase 6) runs hour → day → week 
 
 Decisions made while implementing #2, kept here so later phases build on actual behaviour:
 
-- **The bot's own messages are not persisted.** The Bot API never delivers a bot's outgoing messages as updates. Persisting them (§3.1 "bot_self") needs a send wrapper, which is deferred to the Phase 3 UI framework. Nothing in Phase 2 depends on it.
+- **The bot's own messages are not persisted.** The Bot API never delivers a bot's outgoing messages as updates. Persisting them (§3.1 "bot_self") needs a send wrapper. Phase 3 only posts the activation notice in groups, so this is deferred to Phase 5, where scheduled summaries are the first substantive bot posts in a group.
 - **`$TICKER`s and `@handles` are extracted but not stored yet.** `extraction/tickers.py` exists and is tested. They become `mentions` / `project_aliases` rows in Phase 6, and are always re-derivable from `messages.text`.
 - **Basic-group id collisions:** when an export's per-user message id collides with a different stored message, the record is skipped and logged as `import_errors.error_code = basic_group_id_collision`. Fingerprint dedup (§5.3 of DATABASE_DESIGN) handles the normal case. Supergroups are unaffected.
 - **MTProto deletions** mark stored messages `is_deleted=true` when they're inside the fetched id range but no longer returned. `gap_confirmed_empty` segments are not written yet. Id ranges that MTProto confirms empty can be added when Phase 9 tightens gap reporting.
