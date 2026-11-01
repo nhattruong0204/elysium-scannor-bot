@@ -124,7 +124,7 @@ async def test_id_gap_detection(session: AsyncSession) -> None:
     )  # type: ignore[arg-type]
     (gap,) = st.gaps_in_window
     assert (gap.kind, gap.start_id, gap.end_id) == ("id_gap", 101, 499)
-    assert "possible gap (IDs 101–499 unaccounted for)" in (gap.note or "")  # noqa: RUF001
+    assert "possible gap (IDs 101–499 unaccounted for)" in (gap.note or "")
     assert not st.complete_for_window
 
 
