@@ -1,0 +1,78 @@
+[project]
+name = "elysium-bot"
+version = "0.1.0.dev0"
+description = "Telegram conversation-intelligence and blockchain-research bot for the Elysium ecosystem"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Proprietary" }
+dependencies = [
+    "python-telegram-bot[job-queue,rate-limiter]~=22.8",
+    "sqlalchemy[asyncio]>=2.0.36",
+    "aiosqlite>=0.20",
+    "alembic>=1.14",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.7",
+    "structlog>=24.4",
+    "typer>=0.15",
+    "httpx>=0.27",
+    "tzdata>=2024.2",
+]
+
+[project.optional-dependencies]
+postgres = ["asyncpg>=0.30"]
+mtproto = ["telethon~=1.45", "cryptography>=43"]
+
+[project.scripts]
+elysium-bot = "elysium_bot.cli:app"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "time-machine>=2.16",
+    "respx>=0.21",
+    "ruff>=0.8",
+    "mypy>=1.13",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/elysium_bot"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+extend-exclude = ["docs", "*.md"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "ASYNC"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/elysium_bot/migrations/versions/*.py" = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+mypy_path = "src"
+packages = ["elysium_bot"]
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["telethon.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "slow: long-running benchmark tests",
+    "postgres: requires ELYSIUM_TEST_POSTGRES_URL",
+    "live_eval: calls real external APIs and costs money",
+]
+filterwarnings = ["error::pytest.PytestUnraisableExceptionWarning"]
