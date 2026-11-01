@@ -8,6 +8,7 @@ from alembic.migration import MigrationContext
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Connection
 
+import elysium_bot.db.models  # noqa: F401  (registers tables)
 from elysium_bot.db import migrate
 from elysium_bot.db.base import Base
 from elysium_bot.db.migrate import include_object
@@ -33,6 +34,7 @@ EXPECTED_TABLES = {
     "chat_roles",
     "audit_log",
     "ui_flows",
+    "scan_checkpoints",
 }
 
 

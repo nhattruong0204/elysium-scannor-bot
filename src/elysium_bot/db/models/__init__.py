@@ -16,6 +16,7 @@ from elysium_bot.db.models.messages import (
     MessageSource,
     MessageVersion,
 )
+from elysium_bot.db.models.scan import ScanCheckpoint
 
 __all__ = [
     "AuditLog",
@@ -33,6 +34,7 @@ __all__ = [
     "MessageLink",
     "MessageSource",
     "MessageVersion",
+    "ScanCheckpoint",
     "Schedule",
     "TelegramChat",
     "TelegramUser",
