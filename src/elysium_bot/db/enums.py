@@ -128,6 +128,7 @@ class Role(StrEnum):
     ADMIN = "admin"
     ANALYST = "analyst"
     VIEWER = "viewer"
+    MEMBER = "member"  # group participant acting on their own data (e.g. /consent); no privileges
 
 
 class StoredRole(StrEnum):
