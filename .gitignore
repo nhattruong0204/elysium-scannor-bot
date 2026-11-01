@@ -19,8 +19,8 @@ build/
 *.db-shm
 *.session
 *.session-journal
-exports/
-backups/
+/exports/
+/backups/
 
 # Secrets
 .env
