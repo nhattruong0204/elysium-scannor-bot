@@ -29,11 +29,13 @@ from telegram.ext import (
 from elysium_bot.config import Settings
 from elysium_bot.db.models import Heartbeat
 from elysium_bot.db.session import create_engine, create_session_factory
+from elysium_bot.exports.service import sweep_tmp
 from elysium_bot.ingestion import coverage, indexer
 from elysium_bot.ingestion.bot_updates import on_chat_member, on_group_message, on_my_chat_member
 from elysium_bot.logging import get_logger
 from elysium_bot.ops.health import POLLING, beat
 from elysium_bot.scheduler.leases import JobService
+from elysium_bot.scheduler.registry import ScheduleRegistry
 from elysium_bot.telegram_ui.flows import FlowStore
 from elysium_bot.telegram_ui.group import (
     CONSENT_PREFIX,
@@ -100,6 +102,7 @@ class Services:
     engine: AsyncEngine
     sessions: async_sessionmaker[AsyncSession]
     jobs: JobService
+    schedules: ScheduleRegistry | None = None
 
 
 def build_services(settings: Settings) -> Services:
@@ -181,6 +184,16 @@ async def _post_init(app: App) -> None:
         _flow_sweep_job, interval=FLOW_SWEEP_INTERVAL, first=FLOW_SWEEP_INTERVAL, name="flow_sweep"
     )
     await _register_commands(app)
+    removed = sweep_tmp(services.settings.data_dir)
+    if removed:
+        log.info("startup.export_tmp_swept", files=removed)
+    services.schedules = ScheduleRegistry(
+        services.sessions,
+        services.jobs,
+        job_queue,
+        mtproto_enabled=services.settings.mtproto_enabled,
+    )
+    await services.schedules.load_all()
     job_queue.run_repeating(
         _index_job, interval=INDEXER_INTERVAL, first=INDEXER_INTERVAL, name="indexer"
     )

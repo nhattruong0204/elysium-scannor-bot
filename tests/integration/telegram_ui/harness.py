@@ -62,6 +62,8 @@ class Harness:
         self.bot.send_message = AsyncMock(side_effect=self._sent)
         self.bot.edit_message_text = AsyncMock(side_effect=self._edited)
         self.bot.answer_callback_query = AsyncMock(side_effect=self._answered)
+        self.documents: list[dict[str, Any]] = []
+        self.bot.send_document = AsyncMock(side_effect=self._document)
         self.views: dict[int, View] = {}
         self.replies: dict[int, list[str]] = {}
         self.context = SimpleNamespace(
@@ -89,6 +91,17 @@ class Harness:
         view.text, view.markup = kw.get("text", text) or "", kw.get("reply_markup")
         view.message_id = kw.get("message_id", view.message_id)
         return True
+
+    async def _document(self, chat_id: int, document: Any = None, **kw: Any) -> Any:
+        self.documents.append(
+            {
+                "chat_id": chat_id,
+                "filename": kw.get("filename"),
+                "caption": kw.get("caption"),
+                "content": document.read(),
+            }
+        )
+        return SimpleNamespace(message_id=next(_ids))
 
     async def _answered(self, callback_query_id: str, text: str | None = None, **kw: Any) -> Any:
         if text:

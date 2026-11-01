@@ -26,6 +26,7 @@ from elysium_bot.db.models import ImportErrorRecord, ImportRun, Job, Message, Sc
 from elysium_bot.db.repositories import AuditLogRepository, ChatRoleRepository
 from elysium_bot.ingestion import coverage
 from elysium_bot.ops import status as status_service
+from elysium_bot.scan.service import last_scan
 from elysium_bot.telegram_ui import render as r
 from elysium_bot.telegram_ui.auth import AuthService, Permission
 from elysium_bot.telegram_ui.components import (
@@ -42,6 +43,7 @@ from elysium_bot.telegram_ui.components import (
 from elysium_bot.telegram_ui.flows import FlowStore
 from elysium_bot.telegram_ui.render import Screen, esc
 from elysium_bot.telegram_ui.router import UiContext, router
+from elysium_bot.telegram_ui.scan_export_screens import export_done, scan_done
 from elysium_bot.timeutil import format_local, to_local, utcnow
 
 if TYPE_CHECKING:
@@ -443,7 +445,8 @@ async def history_screen(ctx: UiContext) -> Screen:
             "To import earlier history, send a Telegram Desktop export (result.json, ≤ 20 MB) in this chat, "
             "or run <code>elysium-bot import-export</code> on the server for larger files.",
         ]
-    lines.append("Message search arrives in Phase 4.")
+    if ctx.can(Permission.SEARCH):
+        rows.append([ctx.btn("🔎 Search messages", "srch", "ask")])
     rows.append([ctx.btn("↻ Refresh", "nav", "history")])
     rows.append(nav_row(ctx))
     return Screen("\n".join(lines), rows)
@@ -920,6 +923,9 @@ async def schedule_action(ctx: UiContext) -> Screen:
         row.interval_min = minutes or None
         row.enabled = bool(minutes)
         row.next_run_at = utcnow() + timedelta(minutes=minutes) if minutes else None
+        if ctx.services.schedules is not None:
+            await ctx.session.flush()
+            ctx.services.schedules.register(row)
     elif prefix == "mode" and value in ("summary", "early"):
         await _change(
             ctx, "summary_mode", "conversation_summary" if value == "summary" else "early_plays"
@@ -1072,7 +1078,14 @@ async def range_action(ctx: UiContext) -> Screen:
     if arg.startswith("p") and arg[1:] in PRESETS:
         st.update(stage="confirm", window=preset_window(arg[1:]).to_state())
     elif arg == "since":
-        alert = "“Since last scan” becomes available once scanning ships (Phase 4)."
+        checkpoint = await last_scan(ctx.session, ctx.chat.id, ctx.scope.actor_tg_user_id)
+        if checkpoint is None or checkpoint.last_scan_end >= utcnow():
+            alert = "No previous scan yet — pick another range."
+        else:
+            st.update(
+                stage="confirm",
+                window=Window(checkpoint.last_scan_end, utcnow(), "Since last scan").to_state(),
+            )
     elif arg == "all":
         cov = await coverage.statement(ctx.session, ctx.chat, tz=tz)
         if cov.earliest_stored_at is None:
@@ -1191,18 +1204,12 @@ async def range_done(ctx: UiContext, window: Window) -> Screen:
         rows = [[ctx.btn(label, "rng", f"mode_{key}")] for key, (label, _) in AI_MODES.items()]
         rows.append([ctx.btn("✏️ Change range", "rng", "chg"), ctx.btn("⌂ Menu", "menu")])
         return Screen(f"<b>AI Analysis</b>\nWindow: {esc(span)}\n\nChoose the analysis mode:", rows)
-    if purpose == "ai":
-        label, phase = AI_MODES.get(st["mode"], ("AI Analysis", 5))
-        screen = placeholder(ctx, label, phase, f"Window: {esc(span)}")
-    else:
-        phase_text = (
-            "Export (JSON / CSV / TXT / Markdown, no AI)"
-            if purpose == "export"
-            else "Scan (index refresh and window statistics, no AI)"
-        )
-        screen = placeholder(
-            ctx, PURPOSE_TITLE[purpose], 4, f"Window: {esc(span)}\n{esc(phase_text)}"
-        )
+    if purpose == "scan":
+        return await scan_done(ctx, window)
+    if purpose == "export":
+        return await export_done(ctx, window)
+    label, phase = AI_MODES.get(st["mode"], ("AI Analysis", 5))
+    screen = placeholder(ctx, label, phase, f"Window: {esc(span)}")
     screen.rows.insert(0, [ctx.btn("✏️ Change range", "rng", "chg")])
     return screen
 

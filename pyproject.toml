@@ -58,6 +58,8 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "ASYNC"]
 # UI copy uses typographic glyphs (‹ › – ℹ ➕) on purpose; screens.py keeps user-facing strings unwrapped.
 "src/elysium_bot/telegram_ui/*.py" = ["RUF001"]
 "src/elysium_bot/telegram_ui/screens.py" = ["RUF001", "E501"]
+"src/elysium_bot/telegram_ui/scan_export_screens.py" = ["RUF001", "E501"]
+"tests/perf/*.py" = ["E501"]  # embedded subprocess scripts
 "tests/**/*.py" = ["RUF001"]
 
 [tool.mypy]
