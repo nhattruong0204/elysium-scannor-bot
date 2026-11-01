@@ -58,12 +58,12 @@ erDiagram
 | is_forum | bool | topics enabled |
 | migrated_from_tg_chat_id | bigint null | basic group → supergroup migration |
 | status | str | `pending` \| `active` \| `paused` \| `deactivated` |
-| activated_at, activated_by_user_id | | |
+| activated_at, activated_by_tg_user_id | | Telegram user id (owners may not be in `telegram_users`) |
 | notice_posted_at, notice_message_id | | participant notice (SECURITY.md §3) |
 | created_at, updated_at | | |
 
 ### `chat_settings` (1:1 with chat)
-`chat_id` PK/FK, `timezone` (default `Asia/Ho_Chi_Minh`), `routine_model`, `routine_effort`, `deep_model`, `deep_effort`, `collection_interval_min` (null = disabled), `summary_interval_min` (null \| 60 \| 120 \| 180 \| 240), `summary_mode` (default `conversation_summary`), `summary_min_messages` (default 20), `summary_destination` (`group` \| `owner_dm` \| specific `tg_chat_id`), `daily_ai_budget_usd`, `retention_days` (null = keep forever), `ai_consent_policy` (`strict` \| `notice_only`), `pseudonymize_exports` (bool), `send_display_names_to_ai` (bool, default false), `updated_by_user_id`, `updated_at`.
+`chat_id` PK/FK, `timezone` (default `Asia/Ho_Chi_Minh`), `routine_model`, `routine_effort`, `deep_model`, `deep_effort`, `collection_interval_min` (null = disabled), `summary_interval_min` (null \| 60 \| 120 \| 180 \| 240), `summary_mode` (default `conversation_summary`), `summary_min_messages` (default 20), `summary_destination` (`group` \| `owner_dm` \| specific `tg_chat_id`), `daily_ai_budget_usd`, `retention_days` (null = keep forever), `ai_consent_policy` (`strict` \| `notice_only`), `pseudonymize_exports` (bool), `send_display_names_to_ai` (bool, default false), `updated_by_tg_user_id`, `updated_at`.
 
 ### `telegram_users`
 `id` PK, `tg_user_id` bigint UNIQUE, `username`, `first_name`, `last_name`, `is_bot`, `first_seen_at`, `last_seen_at`.
@@ -112,7 +112,7 @@ Basic groups are not first class because their message IDs differ between users.
 `id`, `message_id`, `url`, `domain`, `kind` (`website` \| `x` \| `telegram` \| `docs` \| `github` \| `explorer` \| `dex` \| `other`), `position`.
 
 ### `contract_mentions`
-`id`, `message_id`, `raw`, `normalized` (lowercase hex for EVM), `format` (`evm` \| `base58_like` \| `other`), `checksum_state` (`valid_checksum` \| `all_lower_or_upper` \| `invalid_checksum`), `position`. **This is not a verification.** Exports label it "extracted string".
+`id`, `message_id`, `raw`, `normalized` (lowercase hex for EVM), `format` (`evm` \| `base58_like` \| `other`), `checksum_state` (`valid_checksum` \| `all_lower_or_upper` \| `invalid_checksum` \| `not_applicable` for non-EVM strings), `position`. **This is not a verification.** Exports label it "extracted string".
 
 ### `messages_fts` (search index)
 - SQLite: FTS5 virtual table `messages_fts(text, content='messages', content_rowid='id', tokenize="unicode61 remove_diacritics 2 tokenchars '$_'")`, kept in sync by AFTER INSERT/UPDATE/DELETE triggers on `messages`. `tokenchars` keeps `$TICKER` and `snake_case` tokens whole.
@@ -121,7 +121,7 @@ Basic groups are not first class because their message IDs differ between users.
 ## 4. Ingestion and coverage (Phase 1 creates, Phase 2 uses)
 
 ### `import_runs`
-`id`, `chat_id`, `source`, `status` (`running` \| `succeeded` \| `partial` \| `failed` \| `cancelled`), `file_name`, `file_sha256`, `file_bytes`, `started_at`, `finished_at`, `triggered_by_user_id`, counters `seen`, `inserted`, `updated`, `unchanged`, `skipped`, `failed`, `checkpoint` (JSON: last processed `tg_message_id` / byte offset / MTProto `offset_id`), `summary` (JSON: min/max `sent_at`, min/max id).
+`id`, `chat_id`, `source`, `status` (`running` \| `succeeded` \| `partial` \| `failed` \| `cancelled`), `file_name`, `file_sha256`, `file_bytes`, `started_at`, `finished_at`, `triggered_by_tg_user_id`, counters `seen`, `inserted`, `updated`, `unchanged`, `skipped`, `failed`, `checkpoint` (JSON: last processed `tg_message_id` / byte offset / MTProto `offset_id`), `summary` (JSON: min/max `sent_at`, min/max id).
 Index `(chat_id, file_sha256)`: re-importing the same file is allowed and idempotent, and the UI warns that it's a duplicate.
 
 ### `import_errors`
@@ -137,8 +137,8 @@ Overlapping `observed` segments are merged by `coverage.py`. The coverage report
 ## 5. Jobs, scheduling, AI accounting (Phase 1 creates `jobs`, `schedules`, `heartbeats`; Phase 5 creates AI tables)
 
 ### `jobs`
-`id`, `chat_id`, `kind` (`scan` \| `import` \| `mtproto_backfill` \| `reindex` \| `export` \| `ai_analysis` \| `scheduled_summary` \| `dossier_rebuild` \| `digest_build` \| `retention_purge`), `family` (lease key: `ingest` \| `ai` \| `export` \| `maintenance`), `status` (`queued` \| `running` \| `succeeded` \| `failed` \| `cancelled` \| `skipped`), `trigger` (`manual` \| `schedule` \| `startup_resume`), `requested_by_user_id`, `params` (JSON), `progress` (JSON: done/total/stage), `lease_owner`, `lease_expires_at`, `heartbeat_at`, `started_at`, `finished_at`, `error`, `result` (JSON).
-**Overlap guard:** a partial unique index `UNIQUE(chat_id, family) WHERE status='running'` (supported by SQLite ≥ 3.8 and Postgres). On startup, jobs with expired leases are moved to `failed` with `error='lease_expired'`, and resumable kinds are re-queued with `trigger=startup_resume`.
+`id`, `chat_id`, `kind` (`scan` \| `import` \| `mtproto_backfill` \| `reindex` \| `export` \| `ai_analysis` \| `scheduled_summary` \| `dossier_rebuild` \| `digest_build` \| `retention_purge` \| `backup`), `family` (`ingest` \| `ai` \| `export` \| `maintenance`), `lease_key` (`chat:<id>:<family>` or `global:<family>` for chat-less jobs such as backups), `status` (`queued` \| `running` \| `succeeded` \| `failed` \| `cancelled` \| `skipped`), `trigger` (`manual` \| `schedule` \| `startup_resume`), `requested_by_tg_user_id`, `params` (JSON), `progress` (JSON: done/total/stage), `lease_owner`, `lease_expires_at`, `heartbeat_at`, `started_at`, `finished_at`, `error`, `result` (JSON).
+**Overlap guard:** a partial unique index `UNIQUE(lease_key) WHERE status='running'` (supported by SQLite ≥ 3.8 and Postgres). It keys on `lease_key` rather than `(chat_id, family)` because `chat_id` is NULL for global jobs and NULLs never collide in a unique index (implemented in Phase 1). On startup, jobs with expired leases are moved to `failed` with `error='lease_expired'`, and resumable kinds are re-queued with `trigger=startup_resume`.
 
 ### `schedules`
 `id`, `chat_id`, `kind` (`collection` \| `ai_summary` \| `digest` \| `backup` \| `retention`), `interval_min`, `enabled`, `params` (JSON: mode, model, effort, min_messages, destination), `next_run_at`, `last_run_at`, `last_job_id`.
@@ -218,7 +218,7 @@ The model may propose `supported` / `disputed` / `contradicted` / `retracted`, w
 
 ## 7. Access control and UI state (Phase 1 creates; Phase 3 uses)
 
-- `chat_roles`: `(chat_id, tg_user_id)` PK, `role` (`admin` \| `analyst` \| `viewer`), `granted_by`, `granted_at`. Owners come from env and are not stored here.
+- `chat_roles`: `(chat_id, tg_user_id)` PK, `role` (`admin` \| `analyst` \| `viewer`), `granted_by_tg_user_id`, `granted_at`. Owners come from env and are not stored here.
 - `audit_log`: `id`, `chat_id` null, `actor_tg_user_id`, `action` (`export` \| `analysis` \| `ask` \| `settings_change` \| `role_change` \| `import` \| `activate` \| `deactivate` \| `purge_user` \| `delete_chat_data`), `params` (JSON, redacted), `created_at`. Append-only.
 - `ui_flows`: `token` (str(10), PK), `tg_user_id`, `chat_id` null, `flow`, `state` (JSON), `expires_at`. Backs callback data that doesn't fit in 64 bytes (TELEGRAM_UX.md §3).
 
